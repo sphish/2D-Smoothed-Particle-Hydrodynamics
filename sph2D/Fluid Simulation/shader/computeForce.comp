@@ -1,0 +1,71 @@
+#version 450
+#extension GL_ARB_shading_language_420pack : enable
+
+#define M_PI 3.14159265358979323846f
+#define WORK_GROUP_SIZE 128
+
+layout(local_size_x = WORK_GROUP_SIZE) in;
+
+struct Particle {
+	vec2 position;
+	vec2 velocity;
+	vec2 force;
+	float density;
+	float pressure;
+};
+
+layout(std430, binding = 0) buffer positionBlock {
+	Particle particles[];
+};
+
+const float particleLength = 0.005f;
+const float particleMass = 0.8f * particleLength * particleLength * 1000;
+const float smoothingRadius = 4 * particleLength;
+const float viscosity = 3000.f;
+const vec2 gravity = vec2(0, -9800);
+const uint particleCount = 20000;
+
+vec2 kernelSpiky(vec2 o, float h) {
+	float r = length(o);
+	return -45.f / (M_PI * pow(h, 6)) * pow(h - r, 2) * normalize(o);
+}
+
+float kernelViscosity(vec2 o, float h) {
+	float r = length(o);
+	return 45.f / (M_PI * pow(h, 6)) * (h - r);
+}
+
+void main() {
+	uint particleIndex = gl_GlobalInvocationID.x;
+
+	if (particleIndex >= particleCount)
+		return;
+
+	// compute all forces
+	vec2 positionX = particles[particleIndex].position;
+	float densityX = particles[particleIndex].density;
+	float pressureX = particles[particleIndex].pressure;
+	vec2 velocityX = particles[particleIndex].velocity;
+	vec2 externalForce = vec2(0, 0);
+	vec2 pressureForce = vec2(0, 0);
+	vec2 viscosityForce = vec2(0, 0);
+
+	for (uint i = 0; i < particleCount; ++i) {
+		vec2 positionI = particles[i].position;
+		float densityI = particles[i].density;
+		float pressureI = particles[i].pressure;
+		vec2 velocityI = particles[i].velocity;
+		if (particleIndex == i)
+			continue;
+		vec2 positionDelta = positionX - positionI;
+		if (length(positionDelta) < smoothingRadius) {
+			pressureForce += -particleMass * (pressureX + pressureI) / (2.f * densityI) * kernelSpiky(positionDelta, smoothingRadius);
+			viscosityForce += particleMass * (velocityI - velocityX) / densityI * kernelViscosity(positionDelta, smoothingRadius);
+		}
+	}
+
+	externalForce = densityX * gravity;
+	viscosityForce *= viscosity;
+
+	particles[particleIndex].force = pressureForce + viscosityForce + externalForce;
+}
